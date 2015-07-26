@@ -1,0 +1,101 @@
+---
+title: "Classifier for predicting how well people perform weight lifting"
+output: html_document
+---
+## Overview
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement - a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. 
+
+One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, we will use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants to build a predictive model, which can be used to determine how well people perform weightlifting activity. 
+
+The data for this project comes from http://groupware.les.inf.puc-rio.br/har
+
+## Exploratory analysis and feature selection
+
+### Data and distribution
+```{r}
+train=read.csv("pml-training.csv", header=TRUE, quote="\"")
+test=read.csv("pml-testing.csv", header=TRUE, quote="\"")
+```
+What is the distribution of classes in the train dataset
+```{r}
+summary(train$classe)/nrow(train)
+```
+Ok the majority class A (correct type of exercise) is 28%, the rest of the classes have approx equal proportions. Since we want to perform a classification, lets make sure that classe variable is a factor
+```{r}
+class(train$classe)
+```
+
+### Predictors
+Lets take a look at columns that we can try to use as predictors. First we notice that there are 3 columns that are timestamp columns
+```{r}
+ grep("timestamp", tolower(colnames(train)), value = TRUE)
+```
+This timestamp columns are unlikely to be good predictors unless we extract some features from them (like time of the day, for example may be during the night people tend to be more tired and thus do exercises in a less proper manner). However, for the purpose of this project we chose to simply exclude these columns to simplify the model. Also, username is unlikely to be a good predictor, since all users were supervised by instructors and thus they performed exercises labeled as different classes in appropriate manner. We will also exclude num_window and new_window columns as those are related to the feature extraction by the authors of the dataset. We also remove x column, which is just the number of the observation
+```{r}
+train= train[,-c(1:7)]
+test= test[,-c(1:7)]
+```
+Lets take a look at classes of predictors - we need to make sure that all factors are indeed factor variables. these are factor variables
+```{r}
+colnames(train)[sapply(train, class)=="factor"]
+```
+Oops, all those (apart from classe) should be really numeric variables- they got read as factors, because a lot of rows had empty string values in them. Lets convert them to numeric and decide whether we should keep them
+```{r, warning=FALSE}
+factors = colnames(train)[sapply(train, class)=="factor"]
+# remove classe
+factors=factors[-length(factors)]
+
+library(taRifx)
+train <- japply(train, factors, as.character )
+train <- japply(train, factors, as.numeric )
+
+test <- japply(test, factors, as.character )
+test <- japply(test, factors, as.numeric )
+```
+### Dealing with NA's
+Lets now take a look atcolumns that have at least one NA value.
+```{r}
+colnames(train)[colSums(is.na(train))>0]
+```
+So 100 columns in the dataset have NA in them! Lets take a look at what percentage of instances in these columns are actually NA values
+```{r}
+library(reshape2)
+melted= melt(colSums(is.na(train))/nrow(train))
+melted=melted[melted$value>0,]
+melted
+summary(melted)
+```
+So we see that for those 100 columns, at least 98% of the instances don't have values. Thus we will not attempt to infer the values for those columns and will exclude them from the data
+```{r}
+# choose columns to keep
+to_keep=colnames(train)[colSums(is.na(train))==0]
+train <- subset(train, select = to_keep)
+# Test does not have classe variable
+to_keep=to_keep[-length(to_keep)]
+test <- subset(test, select = to_keep)
+```
+
+## Building a model
+since there is a large number of predictors still, it is likely that not all of them are relevant. Thus we choose random forest (just as the authors of paper http://perceptual.mpi-inf.mpg.de/files/2013/03/velloso13_ah.pdf) as a predictive model, since, when it is used with a large number of trees and bagging, it should be tolerant to noise and should be able to discover the most relevant predictors
+```{r}
+library(randomForest)
+set.seed(123131)
+model=randomForest(formula=classe~., data=train, ntree=10)
+model
+```
+Here we see that OOB error estimate is 2.91% (for bagging classifiers, there is no need to use cross validation to come up with an estimate of generalization error https://www.stat.berkeley.edu/~breiman/RandomForests/cc_home.htm). Confusion matrix shows that we make less than 5% error on classes B-D and approx 1.6% percent on most common class A.
+Usually one can improve the random forest performance by increasing the number of trees built (according to Breiman https://www.stat.berkeley.edu/~breiman/RandomForests/cc_home.htm random forests should not overfit, so we can try as large number of trees as computationally feasible). We will try 500 trees
+```{r, cache=TRUE}
+set.seed(123131)
+model=randomForest(formula=classe~., data=train, ntree=500)
+model
+```
+We see that our OOB error is 0.27% (so it should be comparable with CV accuracy of 97.3%) and all class errors are less than 0.06%. This is very impressive performance 
+
+Finally lets use the model to predict test cases
+```{r}
+res=predict(model, newdata=test)
+res
+```
+## Conclusion
+We showed that it is possible to predict how well people performed fitness activity based on data collected by fitness devices. By using only a fraction (approx 32.5%) of columns available from the Weight lifting exercise dataset (http://groupware.les.inf.puc-rio.br/har), we built a random forest with very high predictive power (around 97% accuracy). Of course, the accuracy can be further improved by tuning random forest parameters further, by extracting features from timeseries and by possibly exploring features that were excluded (features with NAs).
